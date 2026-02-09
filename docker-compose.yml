@@ -1,0 +1,143 @@
+services:
+  kafka:
+    image: bitnamilegacy/kafka:3.7
+
+    environment:
+      - KAFKA_CFG_PROCESS_ROLES=controller,broker
+      - KAFKA_CFG_NODE_ID=1
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://0.0.0.0:9092,EXTERNAL://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+      - KAFKA_KRAFT_CLUSTER_ID=abcdefghijklmnopqrstuv
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    networks:
+      - backend_net
+    volumes:
+      - kafka_data:/bitnamilegacy/kafka
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/bitnami/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 20s
+    restart: unless-stopped
+
+  mediamtx:
+    build: ./mediamtx
+    ports:
+      - "8554:8554"
+      - "1935:1935"
+      - "8888:8888"
+      - "8889:8889"
+      - "9997:9997"
+      - "8001-9000:8001-9000/udp"
+    volumes:
+      - ./mediamtx/mediamtx.yml:/mediamtx.yml
+      - ./frames:/app/frames
+    restart: unless-stopped
+    networks:
+      - backend_net
+
+  mediamtx-communicator:
+    build: ./mediamtx_communicator
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      - KAFKA_BROKER=kafka:9092
+      - TOPIC=streams_ativos
+      - MEDIAMTX_HOST=mediamtx
+      - MEDIAMTX_HTTP_PORT=8888
+    ports:
+      - "8000:8000"
+    networks:
+      backend_net:
+        aliases:
+          - mediamtx-communicator
+
+  orchestrator:
+    build: ./orchestrator
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      - KAFKA_BROKER=kafka:9092
+      - TOPIC=streams_ativos
+      - GROUP_ID=streams-logger
+      - FRAMES_DIR=/app/frames
+      - MEDIAMTX_HOST=mediamtx
+      - MEDIAMTX_RTSP_PORT=8554
+
+      # captura periódica
+      - CAPTURE_ENABLED=1
+      - CAPTURE_INTERVAL_S=0.5
+      - CAPTURE_TIMEOUT_S=10
+      - CAPTURE_JPEG_Q=2
+
+      # motion detection
+      - MOTION_ENABLED=1
+      - MOTION_THRESHOLD=0.02
+      - MOTION_DIFF_THRESHOLD=35
+      - MOTION_BLUR=7
+      - MOTION_MIN_INTERVAL_S=1
+      - SAVE_ALL_FRAMES=0
+      - MOTION_LOG_EVERY_FRAME=0
+
+      # alerts Kafka
+      - ALERTS_ENABLED=1
+      - ALERTS_TOPIC=alerts_movimento
+
+      # clipe pós-evento (Opção A)
+      - CLIP_ENABLED=1
+      - CLIP_SECONDS=5
+      - CLIP_FPS=15
+      - CLIP_TIMEOUT_S=30
+      - CLIP_COOLDOWN_S=15
+      - CLIP_PRESET=veryfast
+      - CLIP_CRF=28
+
+      # cortar "cabeça" estática do clipe (segundos)
+      - CLIP_SKIP_HEAD_S=1
+
+      # timeout RTSP do ffmpeg para o clipe (microsegundos)
+      - CLIP_STIMEOUT_US=5000000
+
+    volumes:
+      - ./frames:/app/frames
+    networks:
+      backend_net:
+        aliases:
+          - mediamtx-communicator
+
+  streams-logger-test:
+    build: ./streams_logger_test
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      - KAFKA_BROKER=kafka:9092
+      - TOPIC=streams_ativos
+      - GROUP_ID=streams-logger-test
+      - MEDIAMTX_HOST=mediamtx
+      - MEDIAMTX_RTSP_PORT=8554
+    networks:
+      backend_net:
+        aliases:
+          - streams-logger-test
+    volumes:
+      - ./frames:/app/frames
+
+networks:
+  backend_net:
+    driver: bridge
+
+volumes:
+  kafka_data:

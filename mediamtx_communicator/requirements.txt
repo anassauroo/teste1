@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+kafka-python
+python-multipart
+requests
+httpx

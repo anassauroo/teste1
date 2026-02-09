@@ -1,0 +1,4 @@
+paths:
+  all:
+    source: publisher
+    runOnDemandRestart: yes
